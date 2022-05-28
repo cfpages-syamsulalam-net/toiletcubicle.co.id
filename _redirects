@@ -1,8 +1,8 @@
-/kaca /bahan/kaca 301
+/kaca https://kaca.toiletcubicle.co.id/bahan/kaca 301
 /phenolic /bahan/phenolic 301
 /pvc /bahan/pvc 301
 /wpc /bahan/wpc 301
 /akrilik /bahan/akrilik 301
 /hpl /bahan/hpl 301
 /grc /bahan/grc 301
-/kaca/*.html https://kaca.toiletcubicle.co.id/kaca/:splat.html 301
+/kaca/:slug.html https://kaca.toiletcubicle.co.id/kaca/:slug.html 301
