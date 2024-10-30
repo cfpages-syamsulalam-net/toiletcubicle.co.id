@@ -8,3 +8,4 @@
 /grc /bahan/grc 301
 /kaca/:slug https://kaca.toiletcubicle.co.id/kaca/:slug 301
 /kaca/:slug.html https://kaca.toiletcubicle.co.id/kaca/:slug.html 301
+/artikel2/:slug /artikel/:slug 301
