@@ -9,3 +9,5 @@
 /kaca/:slug https://kaca.toiletcubicle.co.id/kaca/:slug 301
 /kaca/:slug.html https://kaca.toiletcubicle.co.id/kaca/:slug.html 301
 /artikel2/:slug /artikel/:slug 301
+/pvc/:slug-2 /pvc/:slug 301
+/phenolic/:slug-2 /phenolic/:slug 301
