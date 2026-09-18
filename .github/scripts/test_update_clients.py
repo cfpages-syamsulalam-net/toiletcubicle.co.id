@@ -402,11 +402,11 @@ class ClientsTests(unittest.TestCase):
         previous = self.root / "clients-before"
         previous.write_text(client(), encoding="utf-8")
         (self.root / ".clients").write_text(
-            client()
-            + "\n"
-            + "|".join(
+            "|".join(
                 ["Anthock", NEW_PHONE, NEW_WA, NEW_TEL, "basename:portable,portabel"]
-            ),
+            )
+            + "\n"
+            + client(["-portable,-portabel"]),
             encoding="utf-8",
         )
         result = self.run_cli(previous=previous)

@@ -11,7 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -412,12 +412,12 @@ def update(
     root: Path,
     clients_path: Path,
     dry_run: bool,
-    only_clients: set[str] | None = None,
+    only_clients: set[Client] | None = None,
 ) -> dict[str, object]:
     root = root.resolve()
     clients = parse_clients(clients_path)
     if only_clients is not None:
-        clients = [client for client in clients if client.name in only_clients]
+        clients = [client for client in clients if client in only_clients]
     unfiltered = [client for client in clients if client.filter is None]
     if len(unfiltered) > 1:
         raise ClientsError("multiple unfiltered clients are ambiguous")
@@ -538,11 +538,14 @@ def main(argv: list[str] | None = None) -> int:
         clients = args.clients if args.clients.is_absolute() else root / args.clients
         only_clients = None
         if args.previous_clients is not None:
-            previous = {client.name: client for client in parse_clients(args.previous_clients)}
+            previous = {
+                replace(client, row=0, filter=None)
+                for client in parse_clients(args.previous_clients)
+            }
             only_clients = {
-                client.name
+                client
                 for client in parse_clients(clients)
-                if previous.get(client.name) != client
+                if replace(client, row=0, filter=None) not in previous
             }
         summary = update(root, clients, args.dry_run, only_clients)
         _write_outputs(summary, args.summary, args.paths_file)
