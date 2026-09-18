@@ -408,9 +408,16 @@ def _relative(path: Path, root: Path) -> str:
         raise ClientsError("path escaped repository root") from None
 
 
-def update(root: Path, clients_path: Path, dry_run: bool) -> dict[str, object]:
+def update(
+    root: Path,
+    clients_path: Path,
+    dry_run: bool,
+    only_clients: set[str] | None = None,
+) -> dict[str, object]:
     root = root.resolve()
     clients = parse_clients(clients_path)
+    if only_clients is not None:
+        clients = [client for client in clients if client.name in only_clients]
     unfiltered = [client for client in clients if client.filter is None]
     if len(unfiltered) > 1:
         raise ClientsError("multiple unfiltered clients are ambiguous")
@@ -517,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--paths-file", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--previous-clients", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verify-git", action="store_true")
     args = parser.parse_args(argv)
@@ -528,7 +536,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.clients is None or args.summary is None:
             parser.error("--clients and --summary are required for update mode")
         clients = args.clients if args.clients.is_absolute() else root / args.clients
-        summary = update(root, clients, args.dry_run)
+        only_clients = None
+        if args.previous_clients is not None:
+            previous = {client.name: client for client in parse_clients(args.previous_clients)}
+            only_clients = {
+                client.name
+                for client in parse_clients(clients)
+                if previous.get(client.name) != client
+            }
+        summary = update(root, clients, args.dry_run, only_clients)
         _write_outputs(summary, args.summary, args.paths_file)
         if args.github_output is not None:
             with args.github_output.open("a", encoding="utf-8", newline="\n") as stream:

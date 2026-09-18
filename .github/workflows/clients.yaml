@@ -41,6 +41,10 @@ jobs:
         run: |
           args=()
           dry_run=false
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]] &&
+             git show "${{ github.event.before }}:.clients" > "$RUNNER_TEMP/clients-before" 2>/dev/null; then
+            args+=(--previous-clients "$RUNNER_TEMP/clients-before")
+          fi
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] &&
              { [[ "$GITHUB_REF_TYPE" != "branch" ]] || [[ "$INPUT_DRY_RUN" == "true" ]]; }; then
             args+=(--dry-run)

@@ -86,7 +86,7 @@ class ClientsTests(unittest.TestCase):
         path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + data)
         return path
 
-    def run_cli(self, clients=".clients", dry_run=False):
+    def run_cli(self, clients=".clients", dry_run=False, previous=None):
         command = [
             sys.executable,
             "-B",
@@ -102,6 +102,8 @@ class ClientsTests(unittest.TestCase):
             "--github-output",
             str(self.root / "output.txt"),
         ]
+        if previous is not None:
+            command.extend(["--previous-clients", str(previous)])
         if dry_run:
             command.append("--dry-run")
         return subprocess.run(command, text=True, capture_output=True)
@@ -394,6 +396,24 @@ class ClientsTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root / "summary.json").read_text())["mode"], "dry-run")
         self.assertEqual((self.root / "paths.bin").read_bytes(), b"index.html\0")
 
+    def test_previous_clients_limits_update_to_changed_row(self):
+        portable = self.write_fixture("portable.html")
+        ordinary = self.write_fixture("ordinary.html")
+        previous = self.root / "clients-before"
+        previous.write_text(client(), encoding="utf-8")
+        (self.root / ".clients").write_text(
+            client()
+            + "\n"
+            + "|".join(
+                ["Anthock", NEW_PHONE, NEW_WA, NEW_TEL, "basename:portable,portabel"]
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_cli(previous=previous)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Anthock", portable.read_text(encoding="utf-8"))
+        self.assertIn(OLD_NAME, ordinary.read_text(encoding="utf-8"))
+
     def test_verify_git_exact_scope_and_outside_dirty_poison(self):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         target = self.write_fixture()
@@ -458,6 +478,8 @@ class ClientsTests(unittest.TestCase):
         for expression in (
             'INPUT_DRY_RUN: ${{ inputs.dry_run }}',
             '"$GITHUB_EVENT_NAME" == "workflow_dispatch"',
+            'git show "${{ github.event.before }}:.clients"',
+            '--previous-clients "$RUNNER_TEMP/clients-before"',
             '"$GITHUB_REF_TYPE" != "branch"',
             '"$INPUT_DRY_RUN" == "true"',
             '"$RUNNER_TEMP/clients-summary.json"',
