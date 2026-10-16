@@ -25,22 +25,25 @@ class Filter:
     clauses: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]
     simple: tuple[str, ...] = ()
     basename: tuple[str, ...] = ()
+    page: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class Client:
     row: int
     name: str
-    phone: str
-    whatsapp: str
-    telephone: str
+    phone: str | None
+    whatsapp: str | None
+    telephone: str | None
     filter: Filter | None
     address: str | None
+    derive_routes: bool = False
 
 
 FILTER_ATOM = r"-?[a-z0-9][a-z0-9._-]*"
 SIMPLE_FILTER_RE = re.compile(rf"{FILTER_ATOM}(?:,{FILTER_ATOM})*\Z")
 BASENAME_FILTER_RE = re.compile(rf"basename:{FILTER_ATOM}(?:,{FILTER_ATOM})*\Z")
+PAGE_FILTER_RE = re.compile(rf"page:{FILTER_ATOM}(?:,{FILTER_ATOM})*\Z")
 CATEGORY_FILTER_RE = re.compile(
     rf"{FILTER_ATOM}(?:,{FILTER_ATOM})*:{FILTER_ATOM}(?:,{FILTER_ATOM})*"
     rf"(?:;{FILTER_ATOM}(?:,{FILTER_ATOM})*:{FILTER_ATOM}(?:,{FILTER_ATOM})*)*\Z"
@@ -124,6 +127,8 @@ def _phone(value: str) -> bool:
 
 def _parse_filter(value: str) -> Filter | None:
     lower = value.casefold()
+    if PAGE_FILTER_RE.fullmatch(lower):
+        return Filter((), (), (), tuple(lower.removeprefix("page:").split(",")))
     if BASENAME_FILTER_RE.fullmatch(lower):
         return Filter((), (), tuple(lower.removeprefix("basename:").split(",")))
     if CATEGORY_FILTER_RE.fullmatch(lower):
@@ -157,8 +162,14 @@ def parse_clients(path: Path) -> list[Client]:
         if any(not value for value in values):
             raise _error(row, "empty field")
         roles: dict[str, str] = {}
+        derive_routes = False
         remaining = []
         for value in values:
+            if value.casefold() == "derive-routes":
+                if derive_routes:
+                    raise _error(row, "duplicate derive-routes option")
+                derive_routes = True
+                continue
             route = _route_role(value)
             if route == "ambiguous":
                 raise _error(row, "ambiguous route")
@@ -191,18 +202,23 @@ def parse_clients(path: Path) -> list[Client]:
                 names.append(value)
         if len(names) != 1:
             raise _error(row, "missing name" if not names else "extra unclassified field")
-        for required in ("phone", "whatsapp", "telephone"):
-            if required not in roles:
-                raise _error(row, f"missing {required}")
+        if derive_routes:
+            if roles:
+                raise _error(row, "derive-routes cannot include contact values")
+        else:
+            for required in ("phone", "whatsapp", "telephone"):
+                if required not in roles:
+                    raise _error(row, f"missing {required}")
         clients.append(
             Client(
                 row,
                 names[0],
-                roles["phone"],
-                roles["whatsapp"],
-                roles["telephone"],
+                roles.get("phone"),
+                roles.get("whatsapp"),
+                roles.get("telephone"),
                 filter_value,
                 roles.get("address"),
+                derive_routes,
             )
         )
     return clients
@@ -224,6 +240,18 @@ def _terms_match(terms: tuple[str, ...], path: str) -> bool:
 
 def _filter_matches(rule: Filter, path: str) -> bool:
     path = _filter_path(path)
+    if rule.page:
+        filename = path.rsplit("/", 1)[-1]
+        candidates = [filename]
+        if filename == "index.html" and "/" in path:
+            candidates.extend(path.rsplit("/", 1)[0].split("/"))
+        negatives = tuple(term[1:] for term in rule.page if term.startswith("-"))
+        if any(term in candidate for term in negatives for candidate in candidates):
+            return False
+        positives = tuple(term for term in rule.page if not term.startswith("-"))
+        return not positives or any(
+            term in candidate for term in positives for candidate in candidates
+        )
     if rule.basename:
         return _terms_match(rule.basename, path.rsplit("/", 1)[-1])
     if rule.simple:
@@ -275,7 +303,51 @@ def _one(values: list[str], role: str, required: bool = True) -> str | None:
     return unique[0]
 
 
+def _derive_route(display: str, whatsapp: bool) -> str:
+    phone = display.rsplit("(", 1)[0].strip()
+    digits = re.sub(r"\D", "", phone)
+    if digits.startswith("0"):
+        digits = "62" + digits[1:]
+    if not digits.startswith("62") or not 8 <= len(digits) <= 16:
+        raise ClientsError("matched HTML displayed phone is not an Indonesian international number")
+    return f"https://wa.me/{digits}" if whatsapp else f"tel:+{digits}"
+
+
+def _derive_routes_from_display(text: str) -> tuple[bool, str]:
+    result = text
+    has_whatsapp = False
+    has_telephone = False
+    for anchor in reversed(list(ANCHOR_RE.finditer(text))):
+        hrefs = list(HREF_RE.finditer(anchor.group(0)))
+        if len(hrefs) != 1:
+            continue
+        href = hrefs[0]
+        try:
+            scheme, host = _valid_url(href.group(2))
+        except ValueError:
+            continue
+        whatsapp = host in {"what.sapp.my.id", "wa.me"}
+        telephone = host == "con.tact.my.id" or scheme == "tel"
+        if not whatsapp and not telephone:
+            continue
+        if whatsapp == telephone:
+            raise ClientsError("matched HTML has ambiguous contact route")
+        displays = DISPLAY_RE.findall(re.sub(r"<[^>]*>", "", anchor.group("body")))
+        if len(displays) != 1:
+            raise ClientsError("derive-routes contact link must contain one displayed phone/name")
+        route = _derive_route(displays[0], whatsapp)
+        replacement = anchor.group(0)[: href.start(2)] + route + anchor.group(0)[href.end(2) :]
+        result = result[: anchor.start()] + replacement + result[anchor.end() :]
+        has_whatsapp |= whatsapp
+        has_telephone |= telephone
+    if not has_whatsapp or not has_telephone:
+        raise ClientsError("derive-routes requires WhatsApp and telephone contact links")
+    return True, result
+
+
 def _transform(text: str, client: Client) -> tuple[bool, str]:
+    if client.derive_routes:
+        return _derive_routes_from_display(text)
     blocks = []
     for match in DIV_RE.finditer(text):
         classes = set(match.group("class").casefold().split())
@@ -434,6 +506,37 @@ def _relative(path: Path, root: Path) -> str:
         raise ClientsError("path escaped repository root") from None
 
 
+def _changed_clients(
+    root: Path, current: list[Client], previous: list[Client]
+) -> set[Client]:
+    previous_by_contact: dict[Client, list[Client]] = {}
+    for client in previous:
+        previous_by_contact.setdefault(
+            replace(client, row=0, filter=None), []
+        ).append(client)
+    html_paths = [
+        _relative(path.resolve(), root.resolve()) for path in _html_paths(root.resolve())
+    ]
+    changed: set[Client] = set()
+    for client in current:
+        prior = previous_by_contact.get(replace(client, row=0, filter=None), [])
+        if not prior:
+            changed.add(client)
+            continue
+        if replace(client, row=0) in {replace(item, row=0) for item in prior}:
+            continue
+        if any(
+            (client.filter is None or _filter_matches(client.filter, path))
+            and not any(
+                item.filter is None or _filter_matches(item.filter, path)
+                for item in prior
+            )
+            for path in html_paths
+        ):
+            changed.add(client)
+    return changed
+
+
 def update(
     root: Path,
     clients_path: Path,
@@ -564,15 +667,9 @@ def main(argv: list[str] | None = None) -> int:
         clients = args.clients if args.clients.is_absolute() else root / args.clients
         only_clients = None
         if args.previous_clients is not None:
-            previous = {
-                replace(client, row=0, filter=None)
-                for client in parse_clients(args.previous_clients)
-            }
-            only_clients = {
-                client
-                for client in parse_clients(clients)
-                if replace(client, row=0, filter=None) not in previous
-            }
+            current_clients = parse_clients(clients)
+            previous_clients = parse_clients(args.previous_clients)
+            only_clients = _changed_clients(root, current_clients, previous_clients)
         summary = update(root, clients, args.dry_run, only_clients)
         _write_outputs(summary, args.summary, args.paths_file)
         if args.github_output is not None:
